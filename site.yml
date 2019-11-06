@@ -20,8 +20,6 @@
           61343332383331326639336161333234656666366661316530373864346435356234353933386434
           3834663666656639640a636361306339386561363636663936643038356262643365616165343465
           6338
-    secret_key_base: "{{ lookup('password', '/dev/null length=128 chars=ascii_letters,digits') }}"
-    core_count: 1
     git_repo: https://gitlab.com/vergilsm/ner.git
     app_env: production
 
