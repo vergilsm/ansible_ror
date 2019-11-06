@@ -1,0 +1,302 @@
+---
+
+- hosts: STAGING_SERVERS_WEB
+  become: yes
+  remote_user: root
+  gather_facts: no
+
+  # Block of variables used in tasks and templates
+  vars:
+    project_name: ner
+    project_path: /home/{{ user_name }}/www/{{ project_name }}
+    user_name: develop
+    user_group: admin
+    ruby_version: 2.6.3
+    postgres_version: 9.6
+    postgres_user_pass: !vault |
+          $ANSIBLE_VAULT;1.1;AES256
+          38383835376633653761643261306434666132373434613034356632633437646331616339336634
+          6536313165393035313361656161346362346661623539620a343239623661613530356166636539
+          61343332383331326639336161333234656666366661316530373864346435356234353933386434
+          3834663666656639640a636361306339386561363636663936643038356262643365616165343465
+          6338
+    secret_key_base: "{{ lookup('password', '/dev/null length=128 chars=ascii_letters,digits') }}"
+    core_count: 1
+    git_repo: https://gitlab.com/vergilsm/ner.git
+    app_env: production
+
+  tasks:
+
+    - name: Update all packages to the latest version
+      apt:
+        upgrade: dist
+
+    # Install system dependencies
+    - name: Install aptitude package
+      apt:
+        name: aptitude
+        force_apt_get: yes
+
+    - name: Install sudo
+      apt:
+        name:  sudo
+        state: present
+
+    # Install python
+    - name: Check for Python
+      raw: test -e /usr/bin/python
+      changed_when: false
+      failed_when: false
+      register: check_python
+
+    - name: Install Python
+      raw: apt -y update && apt install -y python-minimal
+      when: check_python.rc != 0
+
+    - name: Install Ruby dependencies
+      apt:
+        name:
+          - gcc
+          - autoconf
+          - bison
+          - build-essential
+          - git-core
+          - libssl-dev
+          - libyaml-dev
+          - libreadline6-dev
+          - zlib1g-dev
+          - libncurses5-dev
+          - libffi-dev
+          - libgdbm-dev
+          - sqlite3
+          - libsqlite3-dev
+          - nodejs
+
+    # Create user and user_group
+    - name: Create '{{ user_name }}' user with {{ user_group }} group
+      user:
+        name: '{{ user_name }}'
+        comment: Developer
+        group: '{{ user_group }}'
+
+    - name: Ensure group "admin" exists
+      group:
+        name:  admin
+        state: present
+
+    - name: Set authorized key took from file for '{{ user_name }}' user
+      authorized_key:
+        user: '{{ user_name }}'
+        state: present
+        key: "{{ lookup('file', './.ssh/id_rsa.pub') }}"
+
+    - name: Allow 'admin' group to have passwordless sudo
+      lineinfile:
+        dest: /etc/sudoers
+        state: present
+        regexp: '^%admin'
+        line: '%admin ALL=(ALL) NOPASSWD: ALL'
+        validate: 'visudo -cf %s'
+
+    # Install rbenv and ruby version
+    - block:
+        - name: Install rbenv
+          git:
+            repo: https://github.com/rbenv/rbenv.git
+            dest: ~/.rbenv
+
+        - name: Set rbenv init and path
+          lineinfile:
+            dest: ~/.bashrc
+            state: present
+            regexp: "{{ item.regexp }}"
+            line: "{{ item.line }}"
+          with_items:
+            - { regexp: '^PATH.+rbenv', line: 'PATH="$HOME/.rbenv/bin:$PATH"' }
+            - { regexp: '^eval.+rbenv', line: 'eval "$(rbenv init -)"' }
+
+        - name: Install rbenv vars plugin
+          git:
+            repo: https://github.com/rbenv/rbenv-vars.git
+            dest: ~/.rbenv/plugins/rbenv-vars
+
+        - name: Install ruby-build
+          git:
+            repo: https://github.com/rbenv/ruby-build.git
+            dest: ~/.rbenv/plugins/ruby-build
+
+        - name: Check ruby {{ ruby_version }} installed
+          shell: ~/.rbenv/bin/rbenv versions --bare | grep {{ ruby_version }}
+          register: ruby_installed
+          ignore_errors: yes
+
+        - name: Install ruby {{ ruby_version }}
+          command: ~/.rbenv/bin/rbenv install {{ ruby_version }} -v
+          when: ruby_installed is failed
+
+        - name: Set global ruby is {{ ruby_version }}
+          shell: ~/.rbenv/bin/rbenv global {{ ruby_version }}
+
+        - name: Create gemrc file
+          file:
+            path: ~/.gemrc
+            state: touch
+
+        - name: Config gem
+          lineinfile:
+            dest: ~/.gemrc
+            state: present
+            regexp: '^gem.*no-document'
+            line: 'gem: --no-document'
+
+        - name: Check bundler installed
+          shell: ~/.rbenv/bin/rbenv exec gem list | grep bundler | cat
+          register: bundler_installed
+
+        - name: Install bundler
+          command: ~/.rbenv/bin/rbenv exec gem install bundler
+          when: bundler_installed.stdout == ''
+
+      become: yes
+      become_user: '{{ user_name }}'
+
+    # Install postgres
+    - name: Add postgres repository
+      apt_repository:
+        repo: deb http://apt.postgresql.org/pub/repos/apt/ xenial-pgdg main
+        state: present
+
+    - name: Import postgres repository signing key
+      apt_key:
+        url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+        state: present
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install postgresql libs
+      apt:
+        pkg: ['postgresql-{{ postgres_version }}', 'libpq-dev', 'python-psycopg2']
+
+    - name: Add postgres user
+      become_user: postgres
+      postgresql_user:
+        name: '{{ project_name }}'
+        password: '{{ postgres_user_pass }}'
+        role_attr_flags: CREATEDB,NOSUPERUSER
+
+    - name: Create {{ project_name }}_production database
+      become_user: postgres
+      postgresql_db:
+        name: '{{ project_name }}_production'
+        owner: '{{ project_name  }}'
+
+    - name: Restart postgres after configure
+      service:
+        name: postgresql
+        state: restarted
+
+    # Install and settings for nginx passenger
+    - name: Install dirmngr gnupg
+      apt:
+        name:
+          - dirmngr
+          - gnupg
+
+    - name: Add an apt key by id from a keyserver
+      command: apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 561F9B9CAC40B2F7
+
+    - name: Add HTTPS support for APT
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+
+    - name: Add APT repository
+      apt_repository:
+        repo: deb https://oss-binaries.phusionpassenger.com/apt/passenger bionic main > /etc/apt/sources.list.d/passenger.list
+        state: present
+        update_cache: yes
+
+    - name: Install Nginx
+      apt:
+        name: nginx
+        state: present
+        update_cache: yes
+
+    - name: Install Passenger + Nginx module
+      apt:
+        name: libnginx-mod-http-passenger
+
+    # Set Nginx config
+    - name: Deactivate the default nginx site
+      file: path=/etc/nginx/sites-enabled/default
+            state=absent
+
+    - name: Add site for the app under development
+      template:
+        src: ./templates/nginx.j2
+        dest: /etc/nginx/sites-available/{{ project_name }}
+
+    - name: Activate the app
+      file: src=/etc/nginx/sites-available/{{ project_name }}
+            dest=/etc/nginx/sites-enabled/{{ project_name }}
+            state=link
+
+    - name: Restart nginx after configure
+      service:
+        name: nginx
+        state: restarted
+
+    # Clone git repository
+    - name: clone gitlab repo
+      git:
+        repo: "{{ git_repo }}"
+        dest: "{{ project_path }}"
+        update: no
+
+    # Configuration app
+    - name: Create database.yml
+      template:
+        src: ./templates/database.yml.j2
+        dest: '{{ project_path }}/config/database.yml'
+
+    - name: Create master.key
+      template:
+        src: ./templates/master.key.j2
+        dest: '{{ project_path }}/config/master.key'
+
+    # Deploy rails app
+    - block:
+        - name: APP STUB | Run Bundle install
+          shell: bundle install --without test development
+          args:
+            chdir: "{{ project_path }}"
+          ignore_errors: true
+          tags: app_stub
+
+        - name: APP STUB | DB Migrate
+          shell: bundle exec rake db:migrate
+          args:
+            chdir: "{{ project_path }}"
+          environment:
+            RAILS_ENV: "{{app_env}}"
+          ignore_errors: true
+          tags: app_stub
+
+        - name: APP STUB | Precompile assets
+          shell: bundle exec rake assets:precompile
+          args:
+            chdir: "{{ project_path }}"
+          environment:
+            RAILS_ENV: "{{app_env}}"
+          ignore_errors: true
+          tags: app_stub
+
+      become: yes
+      become_user: '{{ user_name }}'
+
+  handlers:
+    - name: reload systemctl
+      command: systemctl daemon-reload

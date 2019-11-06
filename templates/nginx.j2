@@ -1,0 +1,11 @@
+server {
+  listen 80;
+  server_name servername;
+
+  access_log /var/log/nginx/ner.access.log;
+  error_log  /var/log/nginx/ner.error.log;
+
+  passenger_enabled on;
+  rails_env production;
+  root {{ project_path }};
+}
