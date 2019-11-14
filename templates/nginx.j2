@@ -6,6 +6,7 @@ server {
   error_log  /var/log/nginx/ner.error.log;
 
   passenger_enabled on;
+  passenger_ruby {{ passenger_ruby_path }};
   rails_env production;
-  root {{ project_path }};
+  root {{ project_path }}/public;
 }

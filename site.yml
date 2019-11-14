@@ -12,6 +12,7 @@
     user_name: develop
     user_group: admin
     ruby_version: 2.6.3
+    ruby_version2: 2.6.5
     postgres_version: 9.6
     postgres_user_pass: !vault |
           $ANSIBLE_VAULT;1.1;AES256
@@ -22,6 +23,7 @@
           6338
     git_repo: https://gitlab.com/vergilsm/ner.git
     app_env: production
+    passenger_ruby_path: /home/develop/rbenv/shims/ruby
 
   tasks:
 
@@ -65,6 +67,7 @@
           - zlib1g-dev
           - libncurses5-dev
           - libffi-dev
+          - libgdbm5
           - libgdbm-dev
           - sqlite3
           - libsqlite3-dev
@@ -107,21 +110,24 @@
           lineinfile:
             dest: ~/.bashrc
             state: present
-            regexp: "{{ item.regexp }}"
             line: "{{ item.line }}"
           with_items:
-            - { regexp: '^PATH.+rbenv', line: 'PATH="$HOME/.rbenv/bin:$PATH"' }
-            - { regexp: '^eval.+rbenv', line: 'eval "$(rbenv init -)"' }
-
-        - name: Install rbenv vars plugin
-          git:
-            repo: https://github.com/rbenv/rbenv-vars.git
-            dest: ~/.rbenv/plugins/rbenv-vars
+            - { line: 'export PATH="$HOME/.rbenv/bin:$PATH"' }
+            - { line: 'eval "$(rbenv init -)"' }
 
         - name: Install ruby-build
           git:
             repo: https://github.com/rbenv/ruby-build.git
             dest: ~/.rbenv/plugins/ruby-build
+
+        - name: Check ruby {{ ruby_version2 }} installed
+          shell: ~/.rbenv/bin/rbenv versions --bare | grep {{ ruby_version2 }}
+          register: ruby_installed
+          ignore_errors: yes
+
+        - name: Install ruby {{ ruby_version2 }}
+          command: ~/.rbenv/bin/rbenv install {{ ruby_version2 }}
+          when: ruby_installed is failed
 
         - name: Check ruby {{ ruby_version }} installed
           shell: ~/.rbenv/bin/rbenv versions --bare | grep {{ ruby_version }}
@@ -129,7 +135,7 @@
           ignore_errors: yes
 
         - name: Install ruby {{ ruby_version }}
-          command: ~/.rbenv/bin/rbenv install {{ ruby_version }} -v
+          command: ~/.rbenv/bin/rbenv install {{ ruby_version }}
           when: ruby_installed is failed
 
         - name: Set global ruby is {{ ruby_version }}
@@ -151,8 +157,8 @@
           shell: ~/.rbenv/bin/rbenv exec gem list | grep bundler | cat
           register: bundler_installed
 
-        - name: Install bundler
-          command: ~/.rbenv/bin/rbenv exec gem install bundler
+        - name: Install bundler version 2.0.1
+          command: ~/.rbenv/bin/rbenv exec gem install bundler -v 2.0.1
           when: bundler_installed.stdout == ''
 
       become: yes
@@ -241,6 +247,13 @@
       file: src=/etc/nginx/sites-available/{{ project_name }}
             dest=/etc/nginx/sites-enabled/{{ project_name }}
             state=link
+
+    - name: Change the passenger_ruby to etc/nginx/conf.d/mod-http-passenger.conf
+      lineinfile:
+        path: /etc/nginx/conf.d/mod-http-passenger.conf
+        regexp: '^\passenger_ruby /usr/bin/passenger_free_ruby;'
+        line: 'passenger_ruby {{ passenger_ruby_path }};'
+        state: present
 
     - name: Restart nginx after configure
       service:
