@@ -1,2 +1,2 @@
 [STAGING_SERVERS_WEB]
-ner ansible_host=51.158.66.17
+ner ansible_host=51.158.116.175

@@ -1,0 +1,295 @@
+---
+
+- hosts: STAGING_SERVERS_WEB
+  become: yes
+  remote_user: root
+  gather_facts: no
+
+  # Tags:
+  # add_user - Create new user, add ssh keys to remote hosts
+  # rbenv_ruby - Install rbenv, ruby and dependencies
+  # install_nginx_passenger
+  # settings_nginx
+  # install_postgres
+  # set_app - Clone git repository and configuration app
+  # app_stub - Deploy rails app
+
+  tasks:
+
+    # Install python
+    - name: Check for Python
+      raw: test -e /usr/bin/python
+      changed_when: false
+      failed_when: false
+      register: check_python
+
+    - name: Install Python
+      raw: apt -y update && apt install -y python-minimal
+      when: check_python.rc != 0
+
+    - name: Update all packages to the latest version
+      apt:
+        upgrade: dist
+
+    - block:
+        - name: Add user
+          user:
+            name: '{{ user_name }}'
+            groups: sudo
+            shell: /bin/bash
+            password: '{{ user_password }}'
+
+        - name: Add SSH keys to remote hosts
+          authorized_key:
+            user: '{{ user_name }}'
+            state: present
+            key: "{{ lookup('file', '/home/vergil/.ssh/id_rsa.pub') }}"
+
+        - name: Allow '{{ user_name }}' group to have passwordless sudo
+          lineinfile:
+            dest: /etc/sudoers
+            state: present
+            regexp: '^%{{ user_name }}'
+            line: '%{{ user_name }} ALL=(ALL) NOPASSWD: ALL'
+            validate: 'visudo -cf %s'
+
+      tags: add_user
+
+    # Install rbenv and ruby version
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - block:
+        - name: Install Ruby dependencies
+          apt:
+            name:
+              - gcc
+              - autoconf
+              - bison
+              - build-essential
+              - git-core
+              - libssl-dev
+              - libyaml-dev
+              - libreadline6-dev
+              - zlib1g-dev
+              - libncurses5-dev
+              - libffi-dev
+              - libgdbm5
+              - libgdbm-dev
+              - sqlite3
+              - libsqlite3-dev
+              - nodejs
+
+        - name: Install rbenv
+          git:
+            repo: https://github.com/rbenv/rbenv.git
+            dest: ~/.rbenv
+
+        - name: Set rbenv init and path
+          lineinfile:
+            dest: ~/.bashrc
+            state: present
+            line: "{{ item.line }}"
+          with_items:
+            - { line: 'export PATH="$HOME/.rbenv/bin:$PATH"' }
+            - { line: 'eval "$(rbenv init -)"' }
+
+        - name: Source bashrc
+          shell: source ~/.bashrc
+          ignore_errors: true
+
+        - name: Install ruby-build
+          git:
+            repo: https://github.com/rbenv/ruby-build.git
+            dest: ~/.rbenv/plugins/ruby-build
+
+        - name: Check ruby {{ ruby_version }} installed
+          shell: ~/.rbenv/bin/rbenv versions --bare | grep {{ ruby_version }}
+          register: ruby_installed
+          ignore_errors: yes
+
+        - name: Install ruby {{ ruby_version }}
+          command: ~/.rbenv/bin/rbenv install {{ ruby_version }}
+          when: ruby_installed is failed
+
+        - name: Set global ruby is {{ ruby_version }}
+          shell: ~/.rbenv/bin/rbenv global {{ ruby_version }}
+
+        - name: Create gemrc file
+          file:
+            path: ~/.gemrc
+            state: touch
+
+        - name: Config gem
+          lineinfile:
+            dest: ~/.gemrc
+            state: present
+            regexp: '^gem.*no-document'
+            line: 'gem: --no-document'
+
+        - name: Check bundler installed
+          shell: ~/.rbenv/bin/rbenv exec gem list | grep bundler | cat
+          register: bundler_installed
+
+        - name: Install bundler
+          command: ~/.rbenv/bin/rbenv exec gem install bundler -v 2.0.2
+          when: bundler_installed.stdout == ''
+
+        - name: "rbenv rehash"
+          command: "~/.rbenv/bin/rbenv rehash"
+          changed_when: False
+
+      become: yes
+      become_user: '{{ user_name }}'
+      tags: rbenv_ruby
+
+    # Install and settings for nginx passenger
+    - block:
+        - name: Install Nginx
+          apt:
+            name: nginx
+            state: present
+            update_cache: yes
+
+        - name: Install dirmngr gnupg
+          apt:
+            name:
+              - dirmngr
+              - gnupg
+
+        - name: Add an apt key by id from a keyserver
+          command: apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 561F9B9CAC40B2F7
+
+        - name: Add HTTPS support for APT
+          apt:
+            name:
+              - apt-transport-https
+              - ca-certificates
+
+        - name: Add APT repository
+          apt_repository:
+            repo: deb https://oss-binaries.phusionpassenger.com/apt/passenger bionic main > /etc/apt/sources.list.d/passenger.list
+            state: present
+            update_cache: yes
+
+        - name: Install Passenger + Nginx module
+          apt:
+            name: libnginx-mod-http-passenger
+
+      tags: install_nginx_passenger
+
+    # Set Nginx config
+    - block:
+        - name: Change the passenger_ruby to etc/nginx/conf.d/mod-http-passenger.conf
+          lineinfile:
+            path: /etc/nginx/conf.d/mod-http-passenger.conf
+            regexp: '^passenger_ruby /usr/bin/passenger_free_ruby;'
+            state: present
+            line: 'passenger_ruby {{ passenger_ruby_path }};'
+
+        - name: Deactivate the default nginx site
+          file: path=/etc/nginx/sites-enabled/default
+                state=absent
+
+        - name: Add site for the app under development
+          template:
+            src: ./templates/nginx.j2
+            dest: /etc/nginx/sites-available/{{ project_name }}
+
+        - name: Activate the app
+          file: src=/etc/nginx/sites-available/{{ project_name }}
+                dest=/etc/nginx/sites-enabled/{{ project_name }}
+                state=link
+
+        - name: Restart nginx after configure
+          service:
+            name: nginx
+            state: restarted
+
+      tags: settings_nginx
+
+    # Install postgres
+    - block:
+        - name: Update apt cache
+          apt:
+            update_cache: yes
+
+        - name: Install postgresql libs
+          apt:
+            pkg: ['postgresql',
+                  'postgresql-contrib',
+                  'libpq-dev',
+                  'python-psycopg2',
+                  'python3-psycopg2'
+                 ]
+
+        - name: Add postgres user
+          become_user: postgres
+          postgresql_user:
+            name: '{{ user_name }}'
+            password: '{{ postgres_user_pass }}'
+            role_attr_flags: CREATEDB,NOSUPERUSER
+
+        - name: Create {{ project_name }}_production database
+          become_user: postgres
+          postgresql_db:
+            name: '{{ project_name }}_production'
+            owner: '{{ user_name  }}'
+
+        - name: Restart postgres after configure
+          service:
+            name: postgresql
+            state: restarted
+
+      tags: install_postgres
+
+    # Clone git repository and configuration app
+    - block:
+        - name: clone gitlab repo
+          git:
+            repo: "{{ git_repo }}"
+            dest: "{{ project_path }}"
+            update: no
+
+        - name: Create database.yml
+          template:
+            src: ./templates/database.yml.j2
+            dest: '{{ project_path }}/config/database.yml'
+
+        - name: Create master.key
+          template:
+            src: ./templates/master.key.j2
+            dest: '{{ project_path }}/config/master.key'
+
+      tags: set_app
+
+    # Deploy rails app
+    - block:
+        - name: APP STUB | Run Bundle install
+          shell: bundle install --without test development
+          args:
+            chdir: "{{ project_path }}"
+
+        - name: APP STUB | DB Migrate
+          shell: bundle exec rake db:migrate
+          args:
+            chdir: "{{ project_path }}"
+          environment:
+            RAILS_ENV: "{{app_env}}"
+
+        - name: APP STUB | Precompile assets
+          shell: bundle exec rake assets:precompile
+          args:
+            chdir: "{{ project_path }}"
+          environment:
+            RAILS_ENV: "{{app_env}}"
+
+      become: yes
+      become_user: '{{ user_name }}'
+      ignore_errors: true
+      tags: app_stub
+
+  handlers:
+    - name: reload systemctl
+      command: systemctl daemon-reload
