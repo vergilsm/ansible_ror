@@ -128,13 +128,8 @@
             regexp: '^gem.*no-document'
             line: 'gem: --no-document'
 
-        - name: Check bundler installed
-          shell: ~/.rbenv/bin/rbenv exec gem list | grep bundler | cat
-          register: bundler_installed
-
         - name: Install bundler
           command: ~/.rbenv/bin/rbenv exec gem install bundler -v 2.0.2
-          when: bundler_installed.stdout == ''
 
         - name: "rbenv rehash"
           command: "~/.rbenv/bin/rbenv rehash"
@@ -142,6 +137,22 @@
 
       become: yes
       become_user: '{{ user_name }}'
+      tags: rbenv_ruby
+
+    - name: Change access to file .bundle/...
+      file:
+        path: /home/deploy/.bundle/
+        owner: '{{ user_name }}'
+        group: '{{ user_name }}'
+        recurse: yes
+      tags: rbenv_ruby
+
+    - name: Change access to file .rbenv/...
+      file:
+        path: /home/deploy/.rbenv/
+        owner: '{{ user_name }}'
+        group: '{{ user_name }}'
+        recurse: yes
       tags: rbenv_ruby
 
     # Install and settings for nginx passenger
@@ -262,6 +273,7 @@
             src: ./templates/master.key.j2
             dest: '{{ project_path }}/config/master.key'
 
+      become_user: '{{ user_name }}'
       tags: set_app
 
     # Deploy rails app

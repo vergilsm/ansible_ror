@@ -4,5 +4,5 @@ production:
   pool: 25
   timeout: 5000
   host: localhost
-  username: Rails.application.credentials.user_pg
-  password: Rails.application.credentials.postgres_user_pass
+  username: {{ user_name }}
+  password: {{ postgres_user_pass }}
