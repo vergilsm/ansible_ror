@@ -8,9 +8,9 @@
   # Tags:
   # add_user - Create new user, add ssh keys to remote hosts
   # rbenv_ruby - Install rbenv, ruby and dependencies
-  # install_nginx_passenger
+  # nginx_passenger - Install nginx and passenger
   # settings_nginx
-  # install_postgres
+  # postgres - Install postgres
   # set_app - Clone git repository and configuration app
   # app_stub - Deploy rails app
 
@@ -49,8 +49,8 @@
           lineinfile:
             dest: /etc/sudoers
             state: present
-            regexp: '^%{{ user_name }}'
-            line: '%{{ user_name }} ALL=(ALL) NOPASSWD: ALL'
+            regexp: '^{{ user_name }}'
+            line: '{{ user_name }} ALL=(ALL) NOPASSWD: ALL'
             validate: 'visudo -cf %s'
 
       tags: add_user
@@ -279,25 +279,25 @@
     # Deploy rails app
     - block:
         - name: APP STUB | Run Bundle install
-          shell: bundle install --without test development
+          shell: '{{ path_to_bundle }}bundle install --without test development'
           args:
             chdir: "{{ project_path }}"
 
         - name: APP STUB | DB Migrate
-          shell: bundle exec rake db:migrate
+          shell: '{{ path_to_bundle }}bundle exec rake db:migrate'
           args:
             chdir: "{{ project_path }}"
           environment:
             RAILS_ENV: "{{app_env}}"
 
         - name: APP STUB | Precompile assets
-          shell: bundle exec rake assets:precompile
+          shell: '{{ path_to_bundle }}bundle exec rake assets:precompile'
           args:
             chdir: "{{ project_path }}"
           environment:
             RAILS_ENV: "{{app_env}}"
 
-      become: yes
+      become: no
       become_user: '{{ user_name }}'
       ignore_errors: true
       tags: app_stub

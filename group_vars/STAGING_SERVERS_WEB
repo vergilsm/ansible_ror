@@ -27,3 +27,4 @@ postgres_user_pass: !vault |
       6338
 git_repo: https://gitlab.com/vergilsm/ner.git
 app_env: production
+path_to_bundle: /home/deploy/.rbenv/shims/
