@@ -13,6 +13,8 @@
   # postgres - Install postgres
   # set_app - Clone git repository and configuration app
   # app_stub - Deploy rails app
+  # app_update - Update rails app
+  # tmux - Install tmux
 
   tasks:
 
@@ -301,6 +303,49 @@
       become_user: '{{ user_name }}'
       ignore_errors: true
       tags: app_stub
+
+    # Update rails app
+    - block:
+        - name: APP_UPDATE | Git pull
+          command: git pull
+          args:
+            chdir: "{{ project_path }}"
+
+        - name: APP UPDATE | Run Bundle install
+          shell: '{{ path_to_bundle }}bundle install --without test development'
+          args:
+            chdir: "{{ project_path }}"
+
+        - name: APP UPDATE | DB Migrate
+          shell: '{{ path_to_bundle }}bundle exec rake db:migrate'
+          args:
+            chdir: "{{ project_path }}"
+          environment:
+            RAILS_ENV: "{{app_env}}"
+
+        - name: APP UPDATE | Precompile assets
+          shell: '{{ path_to_bundle }}bundle exec rake assets:precompile'
+          args:
+            chdir: "{{ project_path }}"
+          environment:
+            RAILS_ENV: "{{app_env}}"
+
+      become: no
+      become_user: '{{ user_name }}'
+      tags: app_update
+
+    - name: Restart nginx after configure
+      service:
+        name: nginx
+        state: restarted
+      tags: app_update
+
+    # Install tmux
+    - name: Install tmux
+      package:
+        name: tmux
+        state: present
+      tags: tmux
 
   handlers:
     - name: reload systemctl
