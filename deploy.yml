@@ -15,6 +15,7 @@
   # app_stub - Deploy rails app
   # app_update - Update rails app
   # tmux - Install tmux
+  # github_email - Install github-email https://github.com/paulirish/github-email
 
   tasks:
 
@@ -62,27 +63,29 @@
       apt:
         update_cache: yes
 
-    - block:
-        - name: Install Ruby dependencies
-          apt:
-            name:
-              - gcc
-              - autoconf
-              - bison
-              - build-essential
-              - git-core
-              - libssl-dev
-              - libyaml-dev
-              - libreadline6-dev
-              - zlib1g-dev
-              - libncurses5-dev
-              - libffi-dev
-              - libgdbm5
-              - libgdbm-dev
-              - sqlite3
-              - libsqlite3-dev
-              - nodejs
+    - name: Install Ruby dependencies
+      apt:
+        name:
+          - gcc
+          - autoconf
+          - bison
+          - build-essential
+          - git-core
+          - libssl-dev
+          - libyaml-dev
+          - libreadline6-dev
+          - zlib1g-dev
+          - libncurses5-dev
+          - libffi-dev
+          - libgdbm5
+          - libgdbm-dev
+          - sqlite3
+          - libsqlite3-dev
+          - nodejs
+          - npm
+      tags: rbenv_ruby
 
+    - block:
         - name: Install rbenv
           git:
             repo: https://github.com/rbenv/rbenv.git
@@ -156,6 +159,10 @@
         group: '{{ user_name }}'
         recurse: yes
       tags: rbenv_ruby
+
+    - name: Install github-email
+      command: npm install --global github-email
+      tags: github_email
 
     # Install and settings for nginx passenger
     - block:
